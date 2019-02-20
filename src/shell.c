@@ -3,17 +3,50 @@
 #include <unistd.h>
 #include <sys/types.h>
 #include <sys/wait.h>
+#include <errno.h>
 #include <string.h>
 
 #define MAX_CMD_LIMIT 200
 #define NUM_ARG_LIMIT 10
 
+char** get_path() {
+  const char *orig_path = getenv("PATH");
+  if (orig_path == NULL) return NULL;
+  char *dup_path = strdup(orig_path);
+  int dup_path_len = strlen(dup_path);
+
+  int num_path = 1;
+  for (int i = 0; i < strlen(dup_path); i++) {
+    if (dup_path[i] == ':') num_path++;
+  }
+
+  char **path = malloc(sizeof(char*) * (num_path + 1));
+  int ind = 0;
+  path[ind++] = dup_path;
+  for (int i = 0; i < dup_path_len; i++) {
+    if (dup_path[i] == ':') {
+      dup_path[i++] = '\0';
+      path[ind++] = dup_path + i;
+    }
+  }
+  path[ind] = NULL;
+  return path;
+}
+
+void free_path(char **path) {
+  free(*path);
+  free(path);
+}
+
 int main(int argc, char* argv[]) {
-  while (1) {
+  char cmd[MAX_CMD_LIMIT]; 
+  printf("Enter lines of text, ^D to quit:\n");
+
+  char **env_path = get_path();
+
+  while (fgets(cmd, MAX_CMD_LIMIT, stdin) != NULL) {
     int blocking = 1;
 
-    char cmd[MAX_CMD_LIMIT]; 
-    fgets(cmd, MAX_CMD_LIMIT, stdin); 
     char* args[NUM_ARG_LIMIT + 1];
     char* cmdTrm = strtok(cmd, "\n");
     if (cmdTrm[strlen(cmdTrm) - 1] == '&') {
@@ -32,7 +65,21 @@ int main(int argc, char* argv[]) {
       perror("fork failed");
       exit(1);
     } else if (pid == 0) {
+      // exec in process dir
       if (execv(args[0], args) < 0) {
+        if (errno == ENOENT) {
+          // search & exec in PATH
+          for (char **pp = env_path; *pp != NULL; pp++) {
+            char path[sysconf(_PC_PATH_MAX)];
+            sprintf(path, "%s/%s", *pp, args[0]);
+            if (execv(path, args) < 0) {
+              if (errno != ENOENT) {
+                perror("execv error");
+                exit(1);
+              }
+            }
+          }
+        }
         perror("execv error");
         exit(1);
       }
@@ -49,5 +96,7 @@ int main(int argc, char* argv[]) {
       waitpid(pid, &status, WNOHANG);
     }
   }
+
+  free_path(env_path);
   return 0;
 }
