@@ -12,18 +12,19 @@
 char** get_path() {
   const char *orig_path = getenv("PATH");
   if (orig_path == NULL) return NULL;
-  char *dup_path = strdup(orig_path);
-  int dup_path_len = strlen(dup_path);
+  int path_len = strlen(orig_path);
+  char *dup_path = malloc(sizeof(char) * (path_len + 1));
+  strcpy(dup_path, orig_path);
 
   int num_path = 1;
-  for (int i = 0; i < strlen(dup_path); i++) {
+  for (int i = 0; i < path_len; i++) {
     if (dup_path[i] == ':') num_path++;
   }
 
   char **path = malloc(sizeof(char*) * (num_path + 1));
   int ind = 0;
   path[ind++] = dup_path;
-  for (int i = 0; i < dup_path_len; i++) {
+  for (int i = 0; i < path_len; i++) {
     if (dup_path[i] == ':') {
       dup_path[i++] = '\0';
       path[ind++] = dup_path + i;
