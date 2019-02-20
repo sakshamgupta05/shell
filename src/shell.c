@@ -7,8 +7,6 @@
 #include <linux/limits.h>
 #include <string.h>
 
-#define NUM_ARG_LIMIT 10
-
 char** get_path() {
   const char *orig_path = getenv("PATH");
   if (orig_path == NULL) return NULL;
@@ -44,20 +42,29 @@ int main(int argc, char* argv[]) {
 
   printf("$ ");
   while (fgets(cmd, ARG_MAX, stdin) != NULL) {
+    cmd[strcspn(cmd, "\n")] = 0;  // remove trailing newline char
+
     int blocking = 1;
 
-    char* args[NUM_ARG_LIMIT + 1];
-    char* cmdTrm = strtok(cmd, "\n");
-    if (cmdTrm[strlen(cmdTrm) - 1] == '&') {
-      blocking = 0;
+    int c_len = strlen(cmd);
+    int c_argc = 1;
+    for (int i = 0; i < c_len; i++) {
+      // TODO: add support for 'cmd "a b"'
+      if (cmd[i] == ' ') c_argc++;
     }
-    char* arg = strtok(cmdTrm, " &");
-    int i = 0;
-    do {
-      args[i++] = arg;
-      arg = strtok(NULL, " &");
-    } while (arg != NULL && i < NUM_ARG_LIMIT);
-    args[i] = NULL;
+    char* c_argv[c_argc + 1];
+    if (cmd[c_len - 1] == '&') {
+      blocking = 0;
+      cmd[c_len - 1] = '\0';
+      c_len--;
+    }
+
+    char **cp = c_argv;
+    *cp = strtok(cmd, " ");
+    while(*cp != NULL) {
+      cp++;
+      *cp = strtok(NULL, " ");
+    }
 
     pid_t pid = fork();
     if (pid < 0) {
@@ -65,13 +72,13 @@ int main(int argc, char* argv[]) {
       exit(1);
     } else if (pid == 0) {
       // exec in process dir
-      if (execv(args[0], args) < 0) {
+      if (execv(c_argv[0], c_argv) < 0) {
         if (errno == ENOENT) {
           // search & exec in PATH
           for (char **pp = env_path; *pp != NULL; pp++) {
             char path[PATH_MAX];
-            sprintf(path, "%s/%s", *pp, args[0]);
-            if (execv(path, args) < 0) {
+            sprintf(path, "%s/%s", *pp, c_argv[0]);
+            if (execv(path, c_argv) < 0) {
               if (errno != ENOENT) {
                 perror("execv error");
                 exit(1);
