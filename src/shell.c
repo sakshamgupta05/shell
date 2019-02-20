@@ -4,9 +4,9 @@
 #include <sys/types.h>
 #include <sys/wait.h>
 #include <errno.h>
+#include <linux/limits.h>
 #include <string.h>
 
-#define MAX_CMD_LIMIT 200
 #define NUM_ARG_LIMIT 10
 
 char** get_path() {
@@ -22,15 +22,12 @@ char** get_path() {
   }
 
   char **path = malloc(sizeof(char*) * (num_path + 1));
-  int ind = 0;
-  path[ind++] = dup_path;
-  for (int i = 0; i < path_len; i++) {
-    if (dup_path[i] == ':') {
-      dup_path[i++] = '\0';
-      path[ind++] = dup_path + i;
-    }
+  char **pp = path;
+  *pp = strtok(dup_path, ":");
+  while(*pp != NULL) {
+    pp++;
+    *pp = strtok(NULL, ":");
   }
-  path[ind] = NULL;
   return path;
 }
 
@@ -40,12 +37,13 @@ void free_path(char **path) {
 }
 
 int main(int argc, char* argv[]) {
-  char cmd[MAX_CMD_LIMIT]; 
+  char cmd[ARG_MAX]; 
   printf("Enter lines of text, ^D to quit:\n");
 
   char **env_path = get_path();
 
-  while (fgets(cmd, MAX_CMD_LIMIT, stdin) != NULL) {
+  printf("$ ");
+  while (fgets(cmd, ARG_MAX, stdin) != NULL) {
     int blocking = 1;
 
     char* args[NUM_ARG_LIMIT + 1];
@@ -71,7 +69,7 @@ int main(int argc, char* argv[]) {
         if (errno == ENOENT) {
           // search & exec in PATH
           for (char **pp = env_path; *pp != NULL; pp++) {
-            char path[sysconf(_PC_PATH_MAX)];
+            char path[PATH_MAX];
             sprintf(path, "%s/%s", *pp, args[0]);
             if (execv(path, args) < 0) {
               if (errno != ENOENT) {
@@ -96,6 +94,7 @@ int main(int argc, char* argv[]) {
     } else {
       waitpid(pid, &status, WNOHANG);
     }
+    printf("$ ");
   }
 
   free_path(env_path);
