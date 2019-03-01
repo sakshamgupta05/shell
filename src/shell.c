@@ -42,8 +42,7 @@ void free_path(char **path) {
 }
 
 void exec_cmd(char *cmd) {
-  printf("[LOG] %s\n", cmd);
-  int blocking = 1;
+  int fg = 1;
 
   int c_len = strlen(cmd);
   int c_argc = 1;
@@ -53,7 +52,7 @@ void exec_cmd(char *cmd) {
   }
   char* c_argv[c_argc + 1];
   if (cmd[c_len - 1] == '&') {
-    blocking = 0;
+    fg = 0;
     cmd[c_len - 1] = '\0';
     c_len--;
   }
@@ -66,10 +65,22 @@ void exec_cmd(char *cmd) {
   }
 
   pid_t pid = fork();
+
+  /* pid_t pipelinePgid = pid; */
   if (pid < 0) {
     perror("fork failed");
     exit(1);
   } else if (pid == 0) {
+    // create a new process group
+    signal (SIGTTOU, SIG_DFL);
+    if (setpgid(0, 0) < 0) {
+      perror("setpgid");
+    }
+    if (fg) {
+      if (tcsetpgrp(STDIN_FILENO, getpgrp()) < 0) {
+        perror("tcsetpgrp");
+      }
+    }
     // exec in process dir
     if (execv(c_argv[0], c_argv) < 0) {
       if (errno == ENOENT) {
@@ -88,17 +99,30 @@ void exec_cmd(char *cmd) {
       perror("execv error");
       exit(1);
     }
+    exit(2);
+  }
+
+  if (setpgid(pid, pid) == -1 && errno != EACCES) {
+    perror("setpgid");
   }
 
   int status = 0;
-  if (blocking) {
+  if (fg) {
+    if (tcsetpgrp(STDIN_FILENO, getpgid(pid)) < 0) {
+      perror("tcsetpgrp");
+      exit(1);
+    }
     pid_t childpid = waitpid(pid, &status, 0);
-    int retVal = WEXITSTATUS(status);
-    if (childpid >= 0) {
+    if (tcsetpgrp(STDIN_FILENO, getpgrp()) < 0) {
+      perror("tcsetpgrp");
+      exit(1);
+    }
+    if (childpid == -1) {
+      perror("waitpid");
+    } else {
+      int retVal = WEXITSTATUS(status);
       printf("pid: %d, status: %d\n", childpid, retVal);
     }
-  } else {
-    waitpid(pid, &status, WNOHANG);
   }
 
   printf("$ ");
@@ -128,7 +152,7 @@ void edit_sc_cmd(char *cmd) {
   printf("$ ");
 }
 
-void sigHandler(int sig) {
+void sigIntHandler(int sig) {
   printf("\nsc number: ");
   int ind;
   scanf("%d", &ind);
@@ -136,13 +160,30 @@ void sigHandler(int sig) {
   exec_cmd(sc[ind]);
 }
 
+void sigChldHandler(int sig) {
+  int status = 0;
+  while (1) {
+    pid_t childpid = waitpid(-1, &status, WNOHANG);
+    if (childpid == -1) {
+      if (errno == ECHILD) break;
+      perror("waitpid");
+    } else {
+      int retVal = WEXITSTATUS(status);
+      printf("pid: %d, status: %d\n$ ", childpid, retVal);
+      fflush(stdout);
+    }
+  }
+}
+
 int main(int argc, char* argv[]) {
-  if (signal(SIGINT, sigHandler) == SIG_ERR) {
+  if (signal(SIGINT, sigIntHandler) == SIG_ERR) {
     perror("signal");
   }
+  signal(SIGCHLD, sigChldHandler);
+  signal (SIGTTOU, SIG_IGN);
   env_path = get_path();
 
-  char cmd[ARG_MAX]; 
+  char cmd[ARG_MAX];
   printf("Enter lines of text, ^D to quit:\n");
 
   printf("$ ");
