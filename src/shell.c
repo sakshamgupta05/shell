@@ -81,6 +81,42 @@ void exec_cmd(char *cmd_str) {
   for (int i = 0; i < num_cmds; i++) {
     char *cmd = cmds[i];
     int c_len = strlen(cmd);
+
+    int redir = -1;
+    char *fname;
+    if (i == 0) {
+      for (int i = 0; i < c_len; i++) {
+        if (cmd[i] == '<') {
+          redir = 0;
+          for (int j = i-1; cmd[j] == ' '; j--) cmd[j] = '\0';
+          while (cmd[i + 1] == ' ') i++;
+          fname = cmd + i + 1;
+          cmd[i] = '\0';
+          c_len = strlen(cmd);
+        }
+      }
+    }
+    if (i == num_cmds - 1) {
+      for (int i = 0; i < c_len; i++) {
+        if (cmd[i] == '>') {
+          cmd[i] = '\0';
+          if (cmd[i+1] == '>') {
+            redir = 2;
+            for (int j = i-1; cmd[j] == ' '; j--) cmd[j] = '\0';
+            i++;
+            while (cmd[i + 1] == ' ') i++;
+            fname = cmd + i + 1;
+          } else {
+            redir = 1;
+            for (int j = i-1; cmd[j] == ' '; j--) cmd[j] = '\0';
+            while (cmd[i + 1] == ' ') i++;
+            fname = cmd + i + 1;
+          }
+          c_len = strlen(cmd);
+        }
+      }
+    }
+
     int c_argc = 1;
     for (int i = 0; i < c_len; i++) {
       if (cmd[i] == ' ') c_argc++;
@@ -100,6 +136,7 @@ void exec_cmd(char *cmd_str) {
       perror("fork failed");
       exit(1);
     } else if (pid == 0) {
+      printf("pid: %d\n", getpid());
       signal(SIGTTOU, SIG_DFL);
       if (i == 0) {
         pipelinePgid = getpid();
@@ -115,6 +152,22 @@ void exec_cmd(char *cmd_str) {
             perror("tcsetpgrp");
           }
         }
+      }
+      if (i == 0 && redir == 0) {
+        FILE *f = fopen(fname, "r");
+        int fd = fileno(f);
+        printf("remapped input fd: %d\n", fd);
+        dup2(fd, 0);
+      } else if (i == num_cmds - 1 && redir == 1) {
+        FILE *f = fopen(fname, "w");
+        int fd = fileno(f);
+        printf("remapped output fd: %d\n", fd);
+        dup2(fd, 1);
+      } else if (i == num_cmds - 1 && redir == 2) {
+        FILE *f = fopen(fname, "a");
+        int fd = fileno(f);
+        printf("remapped output fd: %d\n", fd);
+        dup2(fd, 1);
       }
       if (i > 0) {
         dup2(p[i-1][0], 0);
@@ -181,11 +234,10 @@ void exec_cmd(char *cmd_str) {
       perror("waitpid");
     } else {
       int retVal = WEXITSTATUS(status);
-      printf("pid: %d, status: %d\n", childpid, retVal);
+      printf("pid: %d, status: %d\n$ ", childpid, retVal);
     }
   }
 
-  printf("$ ");
   fflush(stdout);
 }
 
@@ -223,18 +275,15 @@ void sigIntHandler(int sig) {
 }
 
 void sigChldHandler(int sig) {
-  /* int status = 0; */
-  /* while (1) { */
-  /*   pid_t childpid = waitpid(-1, &status, WNOHANG); */
-  /*   if (childpid == -1) { */
-  /*     if (errno == ECHILD) break; */
-  /*     perror("waitpid"); */
-  /*   } else { */
-  /*     int retVal = WEXITSTATUS(status); */
-  /*     /1* printf("pid: %d, status: %d\n$ ", childpid, retVal); *1/ */
-  /*     fflush(stdout); */
-  /*   } */
-  /* } */
+  int status = 0;
+  pid_t childpid = waitpid(-1, &status, WNOHANG);
+  if (childpid < 0) {
+    if (errno == ECHILD) return;
+  } else {
+    int retVal = WEXITSTATUS(status);
+    printf("pid: %d, status: %d\n$ ", childpid, retVal);
+    fflush(stdout);
+  }
 }
 
 int main(int argc, char* argv[]) {
