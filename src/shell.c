@@ -41,78 +41,138 @@ void free_path(char **path) {
   free(path);
 }
 
-void exec_cmd(char *cmd) {
+void exec_cmd(char *cmd_str) {
+  int cs_len = strlen(cmd_str);
+
+  // set fg if process group
   int fg = 1;
-
-  int c_len = strlen(cmd);
-  int c_argc = 1;
-  for (int i = 0; i < c_len; i++) {
-    // TODO: add support for 'cmd "a b"'
-    if (cmd[i] == ' ') c_argc++;
-  }
-  char* c_argv[c_argc + 1];
-  if (cmd[c_len - 1] == '&') {
+  if (cmd_str[cs_len - 1] == '&') {
     fg = 0;
-    cmd[c_len - 1] = '\0';
-    c_len--;
+    cmd_str[cs_len - 1] = '\0';
+    cs_len--;
   }
 
-  char **cp = c_argv;
-  *cp = strtok(cmd, " ");
-  while(*cp != NULL) {
-    cp++;
-    *cp = strtok(NULL, " ");
-  }
-
-  pid_t pid = fork();
-
-  /* pid_t pipelinePgid = pid; */
-  if (pid < 0) {
-    perror("fork failed");
-    exit(1);
-  } else if (pid == 0) {
-    // create a new process group
-    signal (SIGTTOU, SIG_DFL);
-    if (setpgid(0, 0) < 0) {
-      perror("setpgid");
+  // split commands (pipes)
+  int num_cmds = 1;
+  for (int i = 0; i < cs_len; i++) {
+    if (cmd_str[i] == '|') {
+      num_cmds++;
     }
-    if (fg) {
-      if (tcsetpgrp(STDIN_FILENO, getpgrp()) < 0) {
-        perror("tcsetpgrp");
+  }
+  char *cmds[num_cmds];
+  int ind = 0;
+  cmds[ind++] = cmd_str;
+  for (int i = 0; i < cs_len; i++) {
+    if (cmd_str[i] == '|') {
+      cmd_str[i] = '\0';
+      for (int j = i-1; cmd_str[j] == ' '; j--) cmd_str[j] = '\0';
+      while (cmd_str[i + 1] == ' ') i++;
+      cmds[ind++] = cmd_str + i + 1;
+    }
+  }
+
+  // init pipes
+  int p[num_cmds - 1][2];
+  for (int i = 0; i < num_cmds - 1; i++) pipe(p[i]);
+
+  pid_t pipelinePgid = 0;
+  pid_t lastPid = 0;
+
+  for (int i = 0; i < num_cmds; i++) {
+    char *cmd = cmds[i];
+    int c_len = strlen(cmd);
+    int c_argc = 1;
+    for (int i = 0; i < c_len; i++) {
+      if (cmd[i] == ' ') c_argc++;
+    }
+    char* c_argv[c_argc + 1];
+
+    char **cp = c_argv;
+    *cp = strtok(cmd, " ");
+    while(*cp != NULL) {
+      cp++;
+      *cp = strtok(NULL, " ");
+    }
+
+    pid_t pid = fork();
+
+    if (pid < 0) {
+      perror("fork failed");
+      exit(1);
+    } else if (pid == 0) {
+      signal(SIGTTOU, SIG_DFL);
+      if (i == 0) {
+        pipelinePgid = getpid();
       }
-    }
-    // exec in process dir
-    if (execv(c_argv[0], c_argv) < 0) {
-      if (errno == ENOENT) {
-        // search & exec in PATH
-        for (char **pp = env_path; *pp != NULL; pp++) {
-          char path[PATH_MAX];
-          sprintf(path, "%s/%s", *pp, c_argv[0]);
-          if (execv(path, c_argv) < 0) {
-            if (errno != ENOENT) {
-              perror("execv error");
-              exit(1);
-            }
+      // set process gid
+      if (setpgid(pipelinePgid, pipelinePgid) < 0) {
+        perror("setpgid");
+      }
+      if (i == 0) {
+        // set foreground group
+        if (fg) {
+          if (tcsetpgrp(STDIN_FILENO, getpgrp()) < 0) {
+            perror("tcsetpgrp");
           }
         }
       }
-      perror("execv error");
-      exit(1);
+      if (i > 0) {
+        dup2(p[i-1][0], 0);
+        close(p[i-1][0]);
+        close(p[i-1][1]);
+      }
+      if (i < num_cmds - 1) {
+        dup2(p[i][1], 1);
+        close(p[i][0]);
+        close(p[i][1]);
+      }
+      // exec in process dir
+      if (execv(c_argv[0], c_argv) < 0) {
+        if (errno == ENOENT) {
+          // search & exec in PATH
+          for (char **pp = env_path; *pp != NULL; pp++) {
+            char path[PATH_MAX];
+            sprintf(path, "%s/%s", *pp, c_argv[0]);
+            if (execv(path, c_argv) < 0) {
+              if (errno != ENOENT) {
+                perror("execv error");
+                exit(1);
+              }
+            }
+          }
+        }
+        perror("execv error");
+        exit(1);
+      }
+      exit(2);
     }
-    exit(2);
-  }
 
-  if (setpgid(pid, pid) == -1 && errno != EACCES) {
-    perror("setpgid");
+    if (i > 0) {
+      close(p[i-1][0]);
+    }
+    if (i < num_cmds - 1) {
+      close(p[i][1]);
+    }
+
+    if (setpgid(pid, pid) == -1 && errno != EACCES) {
+      perror("setpgid");
+    }
+
+    if (i == 0 && fg) {
+      if (tcsetpgrp(STDIN_FILENO, getpgid(pid)) < 0) {
+        perror("tcsetpgrp");
+        exit(1);
+      }
+    }
+
+    if (i == num_cmds - 1) {
+      lastPid = pid;
+    }
   }
 
   int status = 0;
   if (fg) {
-    if (tcsetpgrp(STDIN_FILENO, getpgid(pid)) < 0) {
-      perror("tcsetpgrp");
-      exit(1);
-    }
-    pid_t childpid = waitpid(pid, &status, 0);
+    pid_t childpid = waitpid(lastPid, &status, 0);
     if (tcsetpgrp(STDIN_FILENO, getpgrp()) < 0) {
       perror("tcsetpgrp");
       exit(1);
@@ -161,18 +221,18 @@ void sigIntHandler(int sig) {
 }
 
 void sigChldHandler(int sig) {
-  int status = 0;
-  while (1) {
-    pid_t childpid = waitpid(-1, &status, WNOHANG);
-    if (childpid == -1) {
-      if (errno == ECHILD) break;
-      perror("waitpid");
-    } else {
-      int retVal = WEXITSTATUS(status);
-      printf("pid: %d, status: %d\n$ ", childpid, retVal);
-      fflush(stdout);
-    }
-  }
+  /* int status = 0; */
+  /* while (1) { */
+  /*   pid_t childpid = waitpid(-1, &status, WNOHANG); */
+  /*   if (childpid == -1) { */
+  /*     if (errno == ECHILD) break; */
+  /*     perror("waitpid"); */
+  /*   } else { */
+  /*     int retVal = WEXITSTATUS(status); */
+  /*     /1* printf("pid: %d, status: %d\n$ ", childpid, retVal); *1/ */
+  /*     fflush(stdout); */
+  /*   } */
+  /* } */
 }
 
 int main(int argc, char* argv[]) {
