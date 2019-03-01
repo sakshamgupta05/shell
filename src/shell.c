@@ -186,6 +186,7 @@ void exec_cmd(char *cmd_str) {
   }
 
   printf("$ ");
+  fflush(stdout);
 }
 
 void edit_sc_cmd(char *cmd) {
@@ -210,13 +211,14 @@ void edit_sc_cmd(char *cmd) {
   }
 
   printf("$ ");
+  fflush(stdout);
 }
 
 void sigIntHandler(int sig) {
   printf("\nsc number: ");
   int ind;
   scanf("%d", &ind);
-  printf("\npressed\n");
+  printf("%s\n", sc[ind]);
   exec_cmd(sc[ind]);
 }
 
